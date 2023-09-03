@@ -35,11 +35,13 @@ class roi_dataset(Dataset):
 
 test_data = RandomDataset()
 
-database_loader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
+database_loader = torch.utils.data.DataLoader(test_data, batch_size=3, shuffle=False, )
 
 model = PromptModel()
 
-for batch in database_loader:
-    features = model(batch)
-    features = model.get_query(batch)
+text=["a photo of a cat","an image of a dog", "a image of a moderately differentiated cancer"]
+
+for i, img in enumerate(database_loader):
+    features = model(img, text)
+    
     print(features.shape)
