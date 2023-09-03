@@ -168,36 +168,39 @@ class WindowAttention(nn.Module):
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
-        B_, N, C = x.shape
+        B_, N, C = x.shape                          
         qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # bs*64, 3, 49, 32  => like a sequence of length 49, each tokens is dim-32; in 3-head
+        q, k, v = qkv.unbind(0)  # bs*num_win, num_heads, win_size (7*7), head_dim (32) => like a sequence of length 49, each tokens is dim-32; in 3-head
 
         if prompt_for_block is not None:
-            pk, pv = (prompt_for_block, prompt_for_block)                                                         # bs, prompt_len, dim
-            pk = pk.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs, 3, 1, 32  (split dim feature to 3 heads)
-            pv = pv.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs, 3, 1, 32  (split dim feature to 3 heads)
-            k = torch.cat((pk,k), dim=2)                                                      # bs*num_w, num_head, 
+            assert len(prompt_for_block.shape)==2, f'Check the shape of prompt for each block in Swin {prompt_for_block.shape}'
+            prompt_for_block = prompt_for_block.expand(B_,-1,-1)                              # expand prompt for all windows and all data in batch
+            pk, pv = (prompt_for_block, prompt_for_block)                                     # bs*num_win, prompt_len, dim
+            pk = pk.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
+            pv = pv.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
+            k = torch.cat((pk,k), dim=2)                                                      # bs*num_win, num_heads, win_size (7*7), head_dim (32)
             v = torch.cat((pv,v), dim=2)                                                      # bs x 12 x 200 (after prepend pv) x 768 (model_dim)
 
         q = q * self.scale         
         attn = (q @ k.transpose(-2, -1))     # bs*num_window, num_head, 49, 49 + prompt_len
+        prompt_len = attn.size(-1) - attn.size(-2)
 
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH    49 x 49 x 3
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()                  # nH, Wh*Ww, Wh*Ww  3 x 49 x 49
 
         if prompt_for_block is not None:
-            attn[:,:,:,:relative_position_bias.shape[-1]] += relative_position_bias.unsqueeze(0)  # only add positional bias for window, not prompt => 64, 3, 49, 49 + prompt_len
+            attn[:,:,:,prompt_len:] = attn[:,:,:,prompt_len:] + relative_position_bias.unsqueeze(0)  # only add positional bias for window, not prompt => 64, 3, 49, 49 + prompt_len
         else:
             attn = attn + relative_position_bias.unsqueeze(0)                                     # 64, 3, 49, 49
 
         if mask is not None:
             nW = mask.shape[0]                                                                    #  num_win, 49, 49 
-            # TODO: modify mask for prompt. Mask for prompt = 0
+            # Do not add mask to prompt in attention matrix
             if prompt_for_block is not None:
-                temp = attn.view(B_ // nW, nW, self.num_heads, N, -1)[:,:,:,:,:relative_position_bias.shape[-1]] + mask.unsqueeze(1).unsqueeze(0)   # slicing to only add mask for window, not for prompts
+                temp = attn.view(B_ // nW, nW, self.num_heads, N, -1)[:,:,:,:,prompt_len:] + mask.unsqueeze(1).unsqueeze(0)   # slicing to only add mask for window, not for prompts
                 temp = temp.view(-1, self.num_heads, N, N)
-                attn[:,:,:,:relative_position_bias.shape[-1]] = temp                                                                                # slicing to only add mask for window, not for prompts
+                attn[:,:,:,prompt_len:] = temp                                                                       
             else:
                 attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)   #  bs, num_win, num_head, 49, 49
                 attn = attn.view(-1, self.num_heads, N, N)
