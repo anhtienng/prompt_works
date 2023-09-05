@@ -148,8 +148,8 @@ def main():
     # Encoder
     parser.add_argument('--encoder_type', type=str, default='ctranspath')
     parser.add_argument('--encoder_prompt_len', type=int, default=1)
-    parser.add_argument('--encoder_ckpt_path', type=str, default='/home/compu/anhnguyen/TransPath/ctranspath.pth')
-    parser.add_argument('--encoder_skip_layers', type=list, default=[])
+    parser.add_argument('--encoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/ctranspath.pth')
+    parser.add_argument('--encoder_skip_layers', type=list, default=[6,7,8,9,10,11])
     parser.add_argument('--encoder_resize', default=224)
     parser.add_argument('--encoder_mean', default=(0.485, 0.456, 0.406))
     parser.add_argument('--encoder_std', default=(0.229, 0.224, 0.225))
@@ -161,7 +161,7 @@ def main():
     # Decoder
     parser.add_argument('--decoder_type', type=str, default='plip')
     parser.add_argument('--decoder_prompt_len', type=int, default=1)
-    parser.add_argument('--decoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/plip_ckpt')
+    parser.add_argument('--decoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/plip_ckpt')
     parser.add_argument('--decoder_skip_layers', type=list, default=[])
     parser.add_argument('--tokenizer_type', type=str, default="vinid/plip")
 
@@ -171,13 +171,14 @@ def main():
 
     args = parser.parse_args()
 
-    log_skip_layers_encoder = ''.join(args.encoder_skip_layers) if args.encoder_skip_layers != [] else 'full'
-    log_skip_layers_decoder = ''.join(args.decoder_skip_layers) if args.decoder_skip_layers != [] else 'full'
+    log_skip_layers_encoder = str(args.encoder_skip_layers)[1:-1].replace(', ', '') if args.encoder_skip_layers != [] else 'full'
+    log_skip_layers_decoder = str(args.encoder_skip_layers)[1:-1].replace(', ', '') if args.decoder_skip_layers != [] else 'full'
     
     args.prefix_outdir = '-'.join((args.dataset, 
                                     args.encoder_type,
                                     str(args.encoder_prompt_len),
                                     log_skip_layers_encoder,
+                                    f"project_{args.layers_dim[-1]}",
                                     args.decoder_type,
                                     str(args.decoder_prompt_len),
                                     log_skip_layers_decoder,
