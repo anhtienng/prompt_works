@@ -135,7 +135,7 @@ def main():
 
     # Training configuaration
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--bs', type=int, default=512)
+    parser.add_argument('--bs', type=int, default=256)
     parser.add_argument('--device', type=int, default=2)
     parser.add_argument('--optimizer_type', type=str, default="Adam")
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -171,12 +171,12 @@ def main():
 
     args = parser.parse_args()
 
-    log_skip_layers_encoder = ''.join(args.enconder_skip_layers) if args.enconder_skip_layers != [] else 'full'
+    log_skip_layers_encoder = ''.join(args.encoder_skip_layers) if args.encoder_skip_layers != [] else 'full'
     log_skip_layers_decoder = ''.join(args.decoder_skip_layers) if args.decoder_skip_layers != [] else 'full'
     
     args.prefix_outdir = '-'.join((args.dataset, 
                                     args.encoder_type,
-                                    str(args.enconder_prompt_len),
+                                    str(args.encoder_prompt_len),
                                     log_skip_layers_encoder,
                                     args.decoder_type,
                                     str(args.decoder_prompt_len),

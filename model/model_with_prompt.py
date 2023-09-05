@@ -16,7 +16,7 @@ class PromptModel(nn.Module):
         if args.encoder_type == 'ctranspath':
             self.encoder = ctranspath()
             self.encoder.head = nn.Identity()
-            td = torch.load(args.enconder_ckpt_path)
+            td = torch.load(args.encoder_ckpt_path)
             self.encoder.load_state_dict(td['model'], strict=True)
         else:
             raise ValueError(f'Encoder {args.encoder_type} is not supported')
@@ -35,7 +35,7 @@ class PromptModel(nn.Module):
         self.freeze_encoder_and_decoder()
 
         # Init prompt for encoder
-        self.encoder_prompt = EncoderPrompt(args.encoder_type, args.enconder_prompt_len, args.enconder_skip_layers)
+        self.encoder_prompt = EncoderPrompt(args.encoder_type, args.encoder_prompt_len, args.encoder_skip_layers)
         self.key, self.encoder_prompt_dict = self.encoder_prompt.prompt_combination
         for layer_id in self.encoder_prompt_dict:
             setattr(self.encoder, f'prompt_layer_{layer_id}', self.encoder_prompt_dict[layer_id])
