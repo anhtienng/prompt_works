@@ -287,9 +287,12 @@ class CLIPAttention(nn.Module):
                 proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
             key_states = torch.cat((pk,proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
             value_states = torch.cat((pv,proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-        else:
-            # TODO: forward with proj_encoder_feature only, no prompt 
-            raise NotImplementedError
+        else:   # no prompt, only proj_encoder_feature from a projector
+            proj_encoder_feature = \
+                proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
+            key_states = torch.cat((proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+            value_states = torch.cat((proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, src_len, bsz).view(*proj_shape)   # bs x num_heads, seq_len, model_dim//num_head (64)
         key_states = key_states.view(*proj_shape)                                  # bs x num_heads, seq_len, model_dim//num_head (64)
