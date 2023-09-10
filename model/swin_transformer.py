@@ -558,14 +558,13 @@ class SwinTransformer(nn.Module):
         x = torch.flatten(x, 1)         # 8C
         return x
 
-    def forward(self, x, use_prompt):
+    def forward(self, x, use_prompt=True):
         x = self.forward_features(x, use_prompt)
         x = self.head(x)
         return x
 
 
 class ConvStem(nn.Module):
-
     def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=768, norm_layer=None, flatten=True):
         super().__init__()
 
@@ -606,6 +605,5 @@ class ConvStem(nn.Module):
 
 
 def ctranspath():
-    #model = timm.create_model('swin_tiny_patch4_window7_224_with_prompt', embed_layer=ConvStem, pretrained=False)
     model = SwinTransformer(embed_layer=ConvStem, pretrained=False)
     return model

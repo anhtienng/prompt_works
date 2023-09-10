@@ -9,7 +9,10 @@ def generate(
     model.eval()
 
     with torch.no_grad():
-        img = model.encoder(img, use_prompt=True)   # bs, 768
+        if args.encoder_type == 'ctranspath':
+            img = model.encoder(img)
+        else:
+            img = model.encoder(img)[1]
         img = model.projector(img)                  # bs, project_dim
         img = img.reshape(img.shape[0], -1, 512)    # bs, project_dim//512, 512
         token = model.tokenizer(text, return_tensors="pt", padding=True)   # bs, seq_len
@@ -18,7 +21,7 @@ def generate(
         for _ in range(args.generate_length+1):
             attention_mask=torch.where(input_ids<49407,1,0).to(args.device)    # skip the eos token
             output = model.decoder(proj_encoder_feature=img,
-                                   input_ids=input_ids, 
+                                   input_ids=input_ids,
                                    attention_mask=attention_mask)
             logits = model.decoder_head(output.last_hidden_state[:,-1,:])    # forward the last token embedding though a head, bs x 49408
             

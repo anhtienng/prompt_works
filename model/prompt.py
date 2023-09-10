@@ -16,10 +16,10 @@ def create_prompt_combination(type='ctranspath', prompt_len=1, skip_layers=[]):
         head_dim = 32
         num_blocks_in_each_stage = [2,2,6,2]
         shape_of_each_stage = [
-            (prompt_len, 3*head_dim),
-            (prompt_len, 6*head_dim),
-            (prompt_len, 12*head_dim),
-            (prompt_len, 24*head_dim)
+            (prompt_len, 3*head_dim),  # 96
+            (prompt_len, 6*head_dim),  # 192
+            (prompt_len, 12*head_dim), # 384
+            (prompt_len, 24*head_dim)  # 768
         ]
         i = 0
         for stage, num_blocks in enumerate(num_blocks_in_each_stage):
@@ -34,7 +34,19 @@ def create_prompt_combination(type='ctranspath', prompt_len=1, skip_layers=[]):
         key = create_prompt_and_key((1,model_dim))
         return key, prompt_dict
     
-    elif type == 'plip':
+    elif type == 'e_plip':
+        num_layers = 12
+        model_dim = 768
+        shape = (prompt_len, model_dim)
+        for i in range(num_layers):
+            if i not in skip_layers:
+                prompt_dict[i] = create_prompt_and_key(shape)
+            else:
+                prompt_dict[i] = None
+        key = create_prompt_and_key((1,model_dim))
+        return key, prompt_dict
+
+    elif type == 'd_plip':
         num_layers = 12
         model_dim = 512
         shape = (prompt_len, model_dim)
@@ -43,7 +55,8 @@ def create_prompt_combination(type='ctranspath', prompt_len=1, skip_layers=[]):
                 prompt_dict[i] = create_prompt_and_key(shape)
             else:
                 prompt_dict[i] = None
-        return prompt_dict
+        key = create_prompt_and_key((1,model_dim))
+        return key, prompt_dict
     
 
 def create_prompt_and_key(shape):

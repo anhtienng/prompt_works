@@ -264,7 +264,7 @@ class CLIPAttention(nn.Module):
         causal_attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = False,
         prompt_for_layer = None,
-        proj_encoder_feature = torch.Tensor
+        proj_encoder_feature = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
         bsz, src_len, embed_dim = hidden_states.size()
@@ -283,16 +283,15 @@ class CLIPAttention(nn.Module):
             pk, pv = (prompt_for_layer, prompt_for_layer)                                              # bs, prompt_len, dim
             pk = pk.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
             pv = pv.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
-            proj_encoder_feature = \
-                proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
-            key_states = torch.cat((pk,proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-            value_states = torch.cat((pv,proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-        else:   # no prompt, only proj_encoder_feature from a projector
-            proj_encoder_feature = \
-                proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
-            key_states = torch.cat((proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-            value_states = torch.cat((proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-
+            if proj_encoder_feature is not None:
+                proj_encoder_feature = \
+                    proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
+                key_states = torch.cat((pk,proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+                value_states = torch.cat((pv,proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+            else:
+                key_states = torch.cat((pk,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+                value_states = torch.cat((pv,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+        
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, src_len, bsz).view(*proj_shape)   # bs x num_heads, seq_len, model_dim//num_head (64)
         key_states = key_states.view(*proj_shape)                                  # bs x num_heads, seq_len, model_dim//num_head (64)
@@ -678,6 +677,8 @@ class CLIPEncoder(nn.Module):
                     causal_attention_mask,
                 )
             else:
+                if idx in self.decoder_skip_layers_for_visual:
+                    proj_encoder_feature = None
                 layer_outputs = encoder_layer(
                     hidden_states,
                     attention_mask,
@@ -914,6 +915,7 @@ class CLIPVisionTransformer(nn.Module):
 
         encoder_outputs = self.encoder(
             inputs_embeds=hidden_states,
+            proj_encoder_feature=None,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,

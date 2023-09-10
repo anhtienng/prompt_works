@@ -56,23 +56,23 @@ class ImageCaptionDataset(Dataset):
     def __getitem__(self, index):
         img_path, caption = self.pair_list[index]
         caption = combine_hard_prompt_with_label(self.hard_text_prompt, caption)
-
         image = cv2.imread(img_path)
         image = cv2.resize(image, (self.resize,self.resize))
-
-        train_augmentors = self.train_augmentors()
-        aug_image = train_augmentors.augment_image(image)
-        img_tensor = torch.tensor(aug_image.copy(), dtype=torch.float32).permute(2,0,1) # C,H,W
+        if self.train == True:
+            train_augmentors = self.train_augmentors()
+            image = train_augmentors.augment_image(image)
+        img_tensor = torch.tensor(image.copy(), dtype=torch.float32).permute(2,0,1) # C,H,W
         img_tensor = Normalize(mean=self.mean, std=self.std)(img_tensor)
 
         return img_path, img_tensor, self.hard_text_prompt, caption
 
-    def __init__(self, pair_list, args):
+    def __init__(self, pair_list, args, train=True):
         self.pair_list = pair_list
         self.resize = args.encoder_resize
         self.hard_text_prompt = get_hard_prompt(args.dataset)
         self.mean = args.encoder_mean
         self.std = args.encoder_std
+        self.train = train
 
 def prepare_panda_512_data():
     def map_label_caption(path):
