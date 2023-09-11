@@ -20,7 +20,7 @@ def generate(
 
         for _ in range(args.generate_length+1):
             attention_mask=torch.where(input_ids<49407,1,0).to(args.device)    # skip the eos token
-            output = model.decoder(proj_encoder_feature=img,
+            output = model.forward_decoder(proj_encoder_feature=img,
                                    input_ids=input_ids,
                                    attention_mask=attention_mask)
             logits = model.decoder_head(output.last_hidden_state[:,-1,:])    # forward the last token embedding though a head, bs x 49408

@@ -16,6 +16,8 @@ class PromptModel(nn.Module):
         if args.encoder_type == 'ctranspath':
             self.encoder = ctranspath()
             self.encoder.head = nn.Identity()
+            td = torch.load(args.encoder_ckpt_path)
+            self.encoder.load_state_dict(td['model'], strict=True)
         elif args.encoder_type == 'e_plip':
             self.encoder = CLIPModel.from_pretrained(args.decoder_ckpt_path).vision_model
         else:
