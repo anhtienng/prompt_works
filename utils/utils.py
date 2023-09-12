@@ -32,7 +32,7 @@ def save_config_and_metric(args, best_metrics, best_epoch, run_type='valid'):
     args_str = []
     for attribute in ['epochs','bs', 'optimizer_type', 'lr', 'betas', 'encoder_type', 'encoder_prompt_len',\
                        'encoder_skip_layers','layers_dim','proj_activation','decoder_type','visual_feature_position',\
-                       'decoder_prompt_len','decoder_skip_layers','prefix_outdir']:
+                       'decoder_prompt_len','decoder_skip_layers','prefix_outdir','decoder_skip_layers_for_visual']:
         args_str.append(f'"{getattr(args,attribute)}"')
     args_str = ",".join(args_str) + ','
 

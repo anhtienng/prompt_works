@@ -593,7 +593,7 @@ def get_caption(dataset_name):
         label = ['benign.',
                  'grade 3 cancer.',
                  'grade 4 cancer.',
-                 'poorly differentiated cancer.'
+                 'grade 5 cancer.'
         ]
     elif dataset_name in ['gastric']:
         label = ['benign.',
