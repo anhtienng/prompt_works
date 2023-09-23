@@ -265,33 +265,48 @@ class CLIPAttention(nn.Module):
         output_attentions: Optional[bool] = False,
         prompt_for_layer = None,
         proj_encoder_feature = None,
+        lora_for_layer = None,
+        lora_config = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
         bsz, src_len, embed_dim = hidden_states.size()
 
         # get query proj
         query_states = self.q_proj(hidden_states) * self.scale               # bs, seq_len, model_dim
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        if lora_for_layer is not None:
+            lora_scale = lora_config[1] / lora_for_layer[0].shape[1]
+            lora_dropout = nn.Dropout(lora_config[0])
+            query_states = torch.add(query_states, torch.matmul(lora_dropout(query_states),torch.matmul(lora_for_layer[0],lora_for_layer[1])*lora_scale))
+            key_states = torch.add(key_states, torch.matmul(lora_dropout(key_states),torch.matmul(lora_for_layer[2],lora_for_layer[3])*lora_scale))
+            value_states = torch.add(value_states, torch.matmul(lora_dropout(value_states),torch.matmul(lora_for_layer[4],lora_for_layer[5])*lora_scale))
 
         # get key and value
-        key_states = self._shape(self.k_proj(hidden_states), -1, bsz)        # bs, num_heads (8), seq_len, model_dim//num_head (64)
-        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)      # bs, num_heads (8), seq_len, model_dim//num_head (64)
+        key_states = self._shape(key_states, -1, bsz)          # bs, num_heads (8), seq_len, model_dim//num_head (64)
+        value_states = self._shape(value_states, -1, bsz)      # bs, num_heads (8), seq_len, model_dim//num_head (64)
         
-        # prompt for key and value
+        # prepend visual feature
+        if proj_encoder_feature is not None:
+            proj_encoder_feature = \
+                proj_encoder_feature.reshape(bsz, self.num_heads, -1, embed_dim // self.num_heads)  # bs, num_heads, prompt_len, head_dim
+            key_states = torch.cat((proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+            value_states = torch.cat((proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+
+        # prepend prompt
         if prompt_for_layer is not None:
-            assert len(prompt_for_layer.shape)==2, f'Check the shape of prompt for each layer in Clip {prompt_for_layer.shape}'
-            prompt_for_layer = prompt_for_layer.expand(bsz,-1,-1)                                      # expand prompt for all data in batch
-            pk, pv = (prompt_for_layer, prompt_for_layer)                                              # bs, prompt_len, dim
-            pk = pk.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
-            pv = pv.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
-            if proj_encoder_feature is not None:
-                proj_encoder_feature = \
-                    proj_encoder_feature.reshape(bsz, -1, self.num_heads, embed_dim // self.num_heads).permute(0, 2, 1, 3)   # bs, num_heads, prompt_len, head_dim
-                key_states = torch.cat((pk,proj_encoder_feature,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-                value_states = torch.cat((pv,proj_encoder_feature,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-            else:
-                key_states = torch.cat((pk,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-                value_states = torch.cat((pv,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-        
+            if isinstance(prompt_for_layer,nn.ParameterList):            # distinct prompts for K and V
+                pk = prompt_for_layer[0].expand(bsz,-1,-1)   # bs*num_win, prompt_len, dim
+                pv = prompt_for_layer[1].expand(bsz,-1,-1)
+            else:                                            # unified prompt for K and V
+                pk = prompt_for_layer.expand(bsz,-1,-1)      # bs*num_win, prompt_len, dim
+                pv = prompt_for_layer.expand(bsz,-1,-1) 
+            pk = pk.reshape(bsz, self.num_heads, -1, embed_dim // self.num_heads)        # bs, num_heads, prompt_len, head_dim
+            pv = pv.reshape(bsz, self.num_heads, -1, embed_dim // self.num_heads)        # bs, num_heads, prompt_len, head_dim
+            key_states = torch.cat((pk,key_states), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+            value_states = torch.cat((pv,value_states), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+            
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
         query_states = self._shape(query_states, src_len, bsz).view(*proj_shape)   # bs x num_heads, seq_len, model_dim//num_head (64)
         key_states = key_states.view(*proj_shape)                                  # bs x num_heads, seq_len, model_dim//num_head (64)
@@ -389,6 +404,8 @@ class CLIPEncoderLayer(nn.Module):
         proj_encoder_feature: torch.Tensor,
         output_attentions: Optional[bool] = False,
         prompt_for_layer = None,
+        lora_for_layer = None,
+        lora_config = None
     ) -> Tuple[torch.FloatTensor]:
         """
         Args:
@@ -409,7 +426,9 @@ class CLIPEncoderLayer(nn.Module):
             causal_attention_mask=causal_attention_mask,
             output_attentions=output_attentions,
             prompt_for_layer=prompt_for_layer,
-            proj_encoder_feature=proj_encoder_feature
+            proj_encoder_feature=proj_encoder_feature,
+            lora_for_layer=lora_for_layer,
+            lora_config=lora_config
         )
         hidden_states = residual + hidden_states
 
@@ -614,6 +633,7 @@ class CLIPEncoder(nn.Module):
         self,
         inputs_embeds,
         proj_encoder_feature,
+        lora_config,
         attention_mask: Optional[torch.Tensor] = None,
         causal_attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
@@ -679,13 +699,23 @@ class CLIPEncoder(nn.Module):
             else:
                 if idx in self.decoder_skip_layers_for_visual:
                     proj_encoder_feature = None
+                if not hasattr(self, f'prompt_layer_{idx}'):
+                    prompt_for_layer = None
+                else:
+                    prompt_for_layer = getattr(self, f'prompt_layer_{idx}')
+                if not hasattr(self, f'lora_layer_{idx}'):
+                    lora_for_layer = None
+                else:
+                    lora_for_layer = getattr(self, f'lora_layer_{idx}')
                 layer_outputs = encoder_layer(
                     hidden_states,
                     attention_mask,
                     causal_attention_mask,
                     output_attentions=output_attentions,
                     proj_encoder_feature=proj_encoder_feature,
-                    prompt_for_layer=getattr(self, f'prompt_layer_{idx}')
+                    prompt_for_layer=prompt_for_layer,
+                    lora_for_layer=lora_for_layer,
+                    lora_config=lora_config
                 )
 
             hidden_states = layer_outputs[0]
@@ -737,6 +767,7 @@ class CLIPTextTransformer(nn.Module):
         input_ids: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         proj_encoder_feature: Optional[torch.Tensor] = None,
+        lora_config = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
@@ -788,6 +819,7 @@ class CLIPTextTransformer(nn.Module):
             inputs_embeds=hidden_states,
             proj_encoder_feature=proj_encoder_feature,
             attention_mask=attention_mask,
+            lora_config=lora_config,
             causal_attention_mask=causal_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,

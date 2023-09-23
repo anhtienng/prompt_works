@@ -162,26 +162,38 @@ class WindowAttention(nn.Module):
         trunc_normal_(self.relative_position_bias_table, std=.02)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask: Optional[torch.Tensor] = None, prompt_for_block = None):
+    def forward(self, x, mask: Optional[torch.Tensor] = None, prompt_for_block = None, 
+                lora_for_block = None, lora_config = None):
         """
         Args:
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
         B_, N, C = x.shape                          
-        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # bs*num_win, num_heads, win_size (7*7), head_dim (32) => like a sequence of length 49, each tokens is dim-32; in 3-head
+        qkv = self.qkv(x)
+
+        if lora_for_block is not None:
+            scale = lora_config[1] / lora_for_block[0].shape[1]
+            lora_dropout = nn.Dropout(lora_config[0])
+            delta = torch.matmul(lora_dropout(qkv),torch.matmul(lora_for_block[0] ,lora_for_block[1])*scale)
+            qkv = torch.add(qkv,delta)
+
+        qkv = qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
 
         if prompt_for_block is not None:
-            assert len(prompt_for_block.shape)==2, f'Check the shape of prompt for each block in Swin {prompt_for_block.shape}'
-            prompt_for_block = prompt_for_block.expand(B_,-1,-1)                              # expand prompt for all windows and all data in batch
-            pk, pv = (prompt_for_block, prompt_for_block)                                     # bs*num_win, prompt_len, dim
-            pk = pk.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
-            pv = pv.reshape(B_, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)  # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
-            k = torch.cat((pk,k), dim=2)                                                      # bs*num_win, num_heads, win_size (7*7), head_dim (32)
-            v = torch.cat((pv,v), dim=2)                                                      # bs x 12 x 200 (after prepend pv) x 768 (model_dim)
+            if isinstance(prompt_for_block,nn.ParameterList):           # distinct prompts for K and V
+                pk = prompt_for_block[0].expand(B_,-1,-1)               # bs*num_win, prompt_len, dim
+                pv = prompt_for_block[1].expand(B_,-1,-1)
+            else:                                                       # unified prompt for K and V
+                pk = prompt_for_block.expand(B_,-1,-1)                  # bs*num_win, prompt_len, dim
+                pv = prompt_for_block.expand(B_,-1,-1)
+            pk = pk.reshape(B_, self.num_heads, -1, C // self.num_heads)            # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
+            pv = pv.reshape(B_, self.num_heads, -1, C // self.num_heads)            # bs*num_win, 3, 1, 32  (split dim feature to 3 heads)
+            k = torch.cat((pk,k), dim=2)                                            # bs*num_win, num_heads, win_size (7*7), head_dim (32)
+            v = torch.cat((pv,v), dim=2)                                            # bs x 12 x 200 (after prepend pv) x 768 (model_dim)
 
-        q = q * self.scale         
+        q = q * self.scale
         attn = (q @ k.transpose(-2, -1))     # bs*num_window, num_head, 49, 49 + prompt_len
         prompt_len = attn.size(-1) - attn.size(-2)
 
@@ -285,7 +297,7 @@ class SwinTransformerBlock(nn.Module):
 
         self.register_buffer("attn_mask", attn_mask)
 
-    def forward(self, x, prompt_for_block=None):      # bs * 3136 * 96   (3136 = 224/4 * 224/4; 96 = C parameter of Swin-Tiny)
+    def forward(self, x, prompt_for_block=None, lora_for_block=None, lora_config=None):      # bs * 3136 * 96   (3136 = 224/4 * 224/4; 96 = C parameter of Swin-Tiny)
 
         H, W = self.input_resolution
         B, L, C = x.shape
@@ -306,7 +318,10 @@ class SwinTransformerBlock(nn.Module):
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C       64*bs x 49 x 96
 
         # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=self.attn_mask, prompt_for_block=prompt_for_block)  # nW*B, window_size*window_size, C
+        attn_windows = self.attn(x_windows, mask=self.attn_mask, 
+                                 prompt_for_block=prompt_for_block,
+                                 lora_for_block = lora_for_block, # nW*B, window_size*window_size, C
+                                 lora_config = lora_config)  
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -419,12 +434,12 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
-    def forward(self, x, prompt_for_stage=None):
+    def forward(self, x, prompt_for_stage=None, lora_for_stage=None, lora_config = None):
         for i, blk in enumerate(self.blocks):
             if not torch.jit.is_scripting() and self.use_checkpoint:
                 x = checkpoint.checkpoint(blk, x)
             else:
-                x = blk(x, prompt_for_stage[i])
+                x = blk(x, prompt_for_stage[i], lora_for_stage[i], lora_config)
         if self.downsample is not None:
             x = self.downsample(x)
         return x
@@ -540,7 +555,7 @@ class SwinTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x, use_prompt):
+    def forward_features(self, x, use_prompt, use_lora, lora_config):
         x = self.patch_embed(x)         # H/4 * W/4 * C   (Swin-T: C=96)
         if self.absolute_pos_embed is not None:
             x = x + self.absolute_pos_embed
@@ -548,18 +563,22 @@ class SwinTransformer(nn.Module):
         # x = self.layers(x)              # H/32 * W/32 * 8C
         layer_idx = [[0,1],[2,3],[4,5,6,7,8,9],[10,11]]
         for i, layer in enumerate(self.layers):
-            if use_prompt:
+            if use_prompt and hasattr(self, 'prompt_layer_0'):
                 prompt_for_stage = [getattr(self, f'prompt_layer_{j}') for j in layer_idx[i]]
             else:
                 prompt_for_stage = [None]*len(layer_idx[i])
-            x = layer(x, prompt_for_stage)
+            if use_lora and hasattr(self, 'lora_layer_0'):
+                lora_for_stage = [getattr(self, f'lora_layer_{j}') for j in layer_idx[i]]
+            else:
+                lora_for_stage = [None]*len(layer_idx[i])
+            x = layer(x, prompt_for_stage, lora_for_stage, lora_config)
         x = self.norm(x)  # B L C
         x = self.avgpool(x.transpose(1, 2))  # B C 1
         x = torch.flatten(x, 1)         # 8C
         return x
 
-    def forward(self, x, use_prompt=True):
-        x = self.forward_features(x, use_prompt)
+    def forward(self, x, use_prompt=True, use_lora=True, lora_config = None):
+        x = self.forward_features(x, use_prompt, use_lora, lora_config)
         x = self.head(x)
         return x
 
