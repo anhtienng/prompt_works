@@ -10,6 +10,8 @@ class MLP(nn.Module):
         sizes = args.layers_dim
         for i in range(len(sizes) - 1):
             layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=True))
+            if i == len(sizes) - 3:
+                layers.append(nn.LayerNorm(sizes[i + 1]))
             if i < len(sizes) - 2:
                 if args.proj_activation == 'gelu':
                     layers.append(nn.GELU())
@@ -29,6 +31,4 @@ class MLP_for_prompt(nn.Module):
         layers = []
         layers.append(nn.Linear(in_dim, out_dim, bias=True))
         layers.append(nn.GELU())
-        # layers.append(nn.Linear(768, out_dim, bias=True))
-        # layers.append(nn.GELU())
         self.model = nn.Sequential(*layers)

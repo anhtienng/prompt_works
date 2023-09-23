@@ -10,16 +10,27 @@ def generate(
 
     with torch.no_grad():
         if args.encoder_type == 'ctranspath':
-            img = model.encoder(img)
+            img = model.encoder(img, lora_config=(0.0, args.lora_alpha))
         else:
             img = model.encoder(img)[1]
         img = model.projector(img)                  # bs, project_dim
-        img = img.reshape(img.shape[0], -1, 512)    # bs, project_dim//512, 512
+        if args.decoder_type == 'd_plip':
+            img = img.reshape(img.shape[0], -1, 512)    # bs, project_dim//512, 512
+        elif args.decoder_type == 'gpt2':
+            img = img.reshape(img.shape[0], -1, 768)
+        else:
+            raise ValueError("Wrong decoder type")
         token = model.tokenizer(text, return_tensors="pt", padding=True)   # bs, seq_len
-        input_ids=token['input_ids'][:,:-1].to(args.device)    # skip the eos token
+        if args.decoder_type == 'd_plip':
+            input_ids=token['input_ids'][:,:-1].to(args.device)    # skip the eos token
+        elif args.decoder_type == 'gpt2':
+            input_ids=token['input_ids'].to(args.device) 
 
         for _ in range(args.generate_length+1):
-            attention_mask=torch.where(input_ids<49407,1,0).to(args.device)    # skip the eos token
+            if args.decoder_type == 'd_plip':
+                attention_mask=torch.where(input_ids<49407,1,0).to(args.device)    # skip the eos token
+            elif args.decoder_type == 'gpt2':
+                attention_mask=torch.where(input_ids<50257,1,0).to(args.device) 
             output = model.forward_decoder(proj_encoder_feature=img,
                                    input_ids=input_ids,
                                    attention_mask=attention_mask)
