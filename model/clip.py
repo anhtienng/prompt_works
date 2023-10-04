@@ -638,7 +638,9 @@ class CLIPEncoder(nn.Module):
         causal_attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None
+        return_dict: Optional[bool] = None,
+        use_lora=True,
+        use_prompt=True,
     ) -> Union[Tuple, BaseModelOutput]:
         r"""
         Args:
@@ -699,11 +701,11 @@ class CLIPEncoder(nn.Module):
             else:
                 if idx in self.decoder_skip_layers_for_visual:
                     proj_encoder_feature = None
-                if not hasattr(self, f'prompt_layer_{idx}'):
+                if not hasattr(self, f'prompt_layer_{idx}') or not use_prompt:
                     prompt_for_layer = None
                 else:
                     prompt_for_layer = getattr(self, f'prompt_layer_{idx}')
-                if not hasattr(self, f'lora_layer_{idx}'):
+                if not hasattr(self, f'lora_layer_{idx}') or not use_lora:
                     lora_for_layer = None
                 else:
                     lora_for_layer = getattr(self, f'lora_layer_{idx}')
@@ -773,6 +775,8 @@ class CLIPTextTransformer(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        use_prompt=True,
+        use_lora=True,
     ) -> Union[Tuple, BaseModelOutputWithPooling]:
         r"""
         Returns:
@@ -788,8 +792,6 @@ class CLIPTextTransformer(nn.Module):
             raise ValueError("You have to specify input_ids or inputs_embeds")
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("Only use input_ids or inputs_embeds")
-        if proj_encoder_feature is None:
-            raise ValueError('Please input the visual feature for CLIP')
 
         if input_ids is not None:
             input_shape = input_ids.size()                     # bs, sequence_len
@@ -823,7 +825,9 @@ class CLIPTextTransformer(nn.Module):
             causal_attention_mask=causal_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            return_dict=return_dict,
+            use_prompt=use_prompt,
+            use_lora=use_lora
         )
 
         last_hidden_state = encoder_outputs[0]                            # bs, seq_len, model_dim

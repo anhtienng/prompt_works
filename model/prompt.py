@@ -123,8 +123,6 @@ def create_lora_combination(args, module):
                     lora_dict[i] = None
                 i+=1
 
-        model_dim = 768
-        key = create_prompt_and_key((1,model_dim))
     elif args.encoder_type == 'e_plip' and module=='encoder':
         raise NotImplementedError
     elif args.decoder_type == 'd_plip' and module=='decoder':
@@ -142,10 +140,10 @@ def create_lora_combination(args, module):
                                                 lora_a_v, lora_b_v])
             else:
                 lora_dict[i] = None
-        key = create_prompt_and_key((1,model_dim))
     else:
         raise ValueError(f'Not support this type: {type}')
     
+    key = create_prompt_and_key((1, 512+768))  # key is concatenated from visual_key and textual_key
     return key, lora_dict
 
 def create_lora(shape_a, shape_b):

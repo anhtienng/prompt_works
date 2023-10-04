@@ -17,8 +17,9 @@ class PromptModel(nn.Module):
         self._init_encoder()
         self._init_projector()
         self._init_decoder()
-        self._freeze_encoder_and_decoder()
-        self._init_prompt()
+        if args.type not in ['full_ft','single_encoder']:
+            self._freeze_encoder_and_decoder()
+            self._init_prompt()
         self._init_tokenizer()
 
     def _init_encoder(self):
@@ -46,12 +47,12 @@ class PromptModel(nn.Module):
             raise ValueError(f'Decoder {self.args.decoder_type} is not supported')
 
     def _init_prompt(self):
-        if self.args.prompt_type != 'lora':
+        if self.args.type != 'lora':
             # Init prompt for encoder
             self.encoder_prompt = EncoderPrompt(self.args.encoder_type, 
                                                 self.args.encoder_prompt_len, 
                                                 self.args.encoder_skip_layers,
-                                                True if self.args.prompt_type == 'distinct' else False)
+                                                True if self.args.type == 'distinct' else False)
             self.key, self.encoder_prompt_dict = self.encoder_prompt.prompt_combination
             if self.args.encoder_type == 'ctranspath':
                 for layer_id in self.encoder_prompt_dict:
@@ -67,7 +68,7 @@ class PromptModel(nn.Module):
                     setattr(self.decoder.encoder, f'prompt_layer_{layer_id}', self.decoder_prompt_dict[layer_id])
                 elif self.args.decoder_type == 'gpt2':
                     setattr(self.decoder, f'prompt_layer_{layer_id}', self.decoder_prompt_dict[layer_id])
-        elif self.args.prompt_type == 'lora':
+        elif self.args.type == 'lora':
             self.encoder_lora = Lora(self.args, module='encoder')
             self.key, self.encoder_lora_dict = self.encoder_lora.lora_combination
             self.decoder_lora = Lora(self.args, module='decoder')
@@ -102,14 +103,24 @@ class PromptModel(nn.Module):
         for param in self.decoder.parameters():
             param.requires_grad = False
 
-    def get_query(self, x):
+    def get_query(self, img, text):
         with torch.no_grad():
             if self.args.encoder_type == 'ctranspath':
-                query = self.encoder(x, use_prompt=False, use_lora=False, lora_config=None)
+                visual_query = self.encoder(img, use_prompt=False, use_lora=False, lora_config=None)
+                token = self.tokenizer(text, return_tensors="pt", padding=True)
+                input_ids=token['input_ids'][:,:-1].to(self.args.device)
+                attention_mask=torch.where(input_ids<50257,1,0).to(self.args.device) 
+                text_query = self.decoder(input_ids=input_ids, 
+                                          proj_encoder_feature=None, 
+                                          attention_mask=attention_mask,
+                                          use_prompt=False,
+                                          use_lora=False, 
+                                          lora_config=None).pooler_output
+                query = torch.cat((visual_query, text_query),dim=1)
             elif self.args.encoder_type == 'e_plip':
                 for layer_id in self.encoder_prompt_dict:
                     setattr(self.encoder.encoder, f'prompt_layer_{layer_id}', None)
-                query = self.encoder(x)[1]
+                query = self.encoder(img)[1]
                 for layer_id in self.encoder_prompt_dict:
                     setattr(self.encoder.encoder, f'prompt_layer_{layer_id}', self.encoder_prompt_dict[layer_id])
         return query

@@ -1,6 +1,6 @@
 import glob
 import torch
-import numpy as np
+import os
 from torch.utils.data import Dataset
 from imgaug import augmenters as iaa
 import cv2
@@ -9,7 +9,8 @@ import random
 import json
 from torchvision.transforms import Normalize
 
-class ImageCaptionDataset(Dataset):
+
+class ImageDataset(Dataset):
     def __len__(self) -> int:
         return len(self.pair_list)
 
@@ -54,8 +55,9 @@ class ImageCaptionDataset(Dataset):
         return input_augs
 
     def __getitem__(self, index):
-        img_path, caption = self.pair_list[index]
-        caption = combine_hard_prompt_with_label(self.hard_text_prompt, caption)
+        img_path, label = self.pair_list[index]
+        if self.args.type != 'single_encoder':
+            caption = combine_hard_prompt_with_label(self.hard_text_prompt, label)
         image = cv2.imread(img_path)
         image = cv2.resize(image, (self.resize,self.resize))
         if self.train == True:
@@ -64,9 +66,13 @@ class ImageCaptionDataset(Dataset):
         img_tensor = torch.tensor(image.copy(), dtype=torch.float32).permute(2,0,1) # C,H,W
         img_tensor = Normalize(mean=self.mean, std=self.std)(img_tensor)
 
-        return img_path, img_tensor, self.hard_text_prompt, caption
+        if self.args.type == 'single_encoder':
+            return img_path, img_tensor, 'no_hard_prompt', label
+        else:
+            return img_path, img_tensor, self.hard_text_prompt, caption
 
     def __init__(self, pair_list, args, train=True):
+        self.args = args
         self.pair_list = pair_list
         self.resize = args.encoder_resize
         self.hard_text_prompt = get_hard_prompt(args.dataset)
@@ -110,12 +116,6 @@ def prepare_panda_512_data():
 
 def prepare_colon(label_type='caption'):
     def map_label_caption(path):
-        # mapping_dict = {
-        #     '0': 'benign.',
-        #     '1': 'cancer well differentiated.',
-        #     '2': 'cancer moderately differentiated.',
-        #     '3': 'cancer poorly differentiated.',
-        # }
         mapping_dict = {
             '0': 'benign.',
             '1': 'well differentiated cancer.',
@@ -153,12 +153,6 @@ def prepare_colon(label_type='caption'):
 
 def prepare_colon_test_2(label_type='caption'):
     def map_label_caption(path):
-        # mapping_dict = {
-        #     '1': 'benign.',
-        #     '2': 'cancer well differentiated.',
-        #     '3': 'cancer moderately differentiated.',
-        #     '4': 'cancer poorly differentiated.',
-        # }
         mapping_dict = {
             '1': 'benign.',
             '2': 'well differentiated cancer.',
@@ -461,15 +455,15 @@ def prepare_k19(label_type='caption'):
     #     8: 'tissue tumor.'
     # }
     mapping_dict = {
-        0: 'adipole tissue.',
-        1: 'background tissue.',
-        2: 'debris tissue.',
-        3: 'lymphocyte tissue.',
-        4: 'debris tissue.',   # mucus -> debris (MUC->DEB)
-        5: 'stroma tissue.',   # muscle -> stroma (MUS->STR)
-        6: 'normal tissue.',
-        7: 'stroma tissue.',
-        8: 'tumor tissue.'
+        0: 'adipole.',
+        1: 'background.',
+        2: 'debris.',
+        3: 'lymphocyte.',
+        4: 'debris.',   # mucus -> debris (MUC->DEB)
+        5: 'stroma.',   # muscle -> stroma (MUS->STR)
+        6: 'normal.',
+        7: 'stroma.',
+        8: 'tumor.'
     }
     if label_type == 'caption':
         for i in range(len(train_set)):
@@ -544,37 +538,268 @@ def prepare_k16(label_type='caption'):
 
     return train_set, valid_set, test_set
 
-def prepare_data(dataset_name):
-    if dataset_name == 'colon-1':
-        return prepare_colon()
-    elif dataset_name == 'colon-2':
-        return prepare_colon_test_2()
-    elif dataset_name == 'prostate-1':
-        return prepare_prostate_uhu_data()
-    elif dataset_name == 'prostate-2':
-        return prepare_prostate_ubc_data()
-    elif dataset_name == 'gastric':
-        return prepare_gastric()
-    elif dataset_name == 'k19':
-        return prepare_k19()
-    elif dataset_name == 'k16':
-        return prepare_k16()
+def prepare_aggc2022_data(label_type='caption'):
+    mapping_dict = {
+        '2': 'benign.',
+        '3': 'grade 3 cancer.',
+        '4': 'grade 4 cancer.',
+        '5': 'grade 5 cancer.',
+    }
+    def load_data_info(pathname):
+        file_list = glob.glob(pathname)
+        file_list = [file_path for file_path in file_list if int(file_path.split('_')[-1][0]) > 1]
+        if label_type != 'caption':
+            label_list = [int(file_path.split('_')[-1][0]) - 2 for file_path in file_list if int(file_path.split('_')[-1][0]) > 1]
+        else:
+            label_list = [mapping_dict[file_path.split('_')[-1][0]] for file_path in file_list if int(file_path.split('_')[-1][0]) > 1]
+        return list(zip(file_list, label_list))
+
+    data_root_dir = '/home/compu/doanhbc/datasets/AGGC22_patch_512_c08'
+    train_set_1 = load_data_info('%s/Subset1_Train_image/*/*' % data_root_dir)
+    train_set_2 = load_data_info('%s/Subset2_Train_image/*/*' % data_root_dir)
+    train_set_3 = load_data_info('%s/Subset3_Train_image/*/*/*' % data_root_dir)
+
+    return train_set_1 + train_set_2 + train_set_3
+
+def prepare_kidney(label_type='caption'):
+    mapping_dict = {
+        '0': 'normal.',
+        '1': 'grade 1 cancer.',
+        '2': 'grade 2 cancer.',
+        '3': 'grade 3 cancer.',
+        '4': 'grade 4 cancer.',
+    }
+    def load_data_info(pathname):
+        file_list = glob.glob(pathname)
+        if label_type != 'caption':
+            label_list = [int(file_path.split('/')[-2][-1]) for file_path in file_list]
+        else:
+            label_list = [mapping_dict[file_path.split('/')[-2][-1]] for file_path in file_list]
+        return list(zip(file_list, label_list))
+    data_root_dir = '/data4/anhnguyen/kidney_grading'
+    train_set = load_data_info('%s/Training/*/*' % data_root_dir)
+    valid_set = load_data_info('%s/Validation/*/*' % data_root_dir)
+    test_set = load_data_info('%s/Test/*/*' % data_root_dir)
+
+    return train_set, valid_set, test_set
+
+def prepare_liver(label_type='caption'):
+    mapping_dict = {
+        '0': 'normal.',
+        '1': 'grade 1 cancer.',
+        '2': 'grade 2 cancer.',
+        '3': 'grade 3 cancer.'
+    }
+    def load_data_info(pathname):
+        file_list = glob.glob(pathname)
+        if label_type != 'caption':
+            label_list = [int(file_path.split('/')[-2][-1]) for file_path in file_list]
+        else:
+            label_list = [mapping_dict[file_path.split('/')[-2][-1]] for file_path in file_list]
+        return list(zip(file_list, label_list))
+    data_root_dir = '/data4/anhnguyen/liver_grading'
+    train_set = load_data_info('%s/Training/*/*' % data_root_dir)
+    valid_set = load_data_info('%s/Validation/*/*' % data_root_dir)
+    test_set = load_data_info('%s/Test/*/*' % data_root_dir)
+
+    return train_set, valid_set, test_set
+
+def prepare_breakhis(label_type='caption', fold_idx=1):
+    mapping_dict = {
+        'A': 'benign - adenosis.',
+        'F': 'benign - fibroadenoma.',
+        'PT': 'benign - phyllodes tumor.',
+        'TA': 'benign - tubular adenoma.',
+        'DC': 'malignant - ductal carcinoma.',
+        'LC': 'malignant - lobular carcinoma.',
+        'MC': 'malignant - mucinous carcinoma.',
+        'PC': 'malignant - papillary carcinoma.'
+    }
+
+    mapping_dict_idx = {
+        'A': 0,
+        'F': 1,
+        'PT': 2,
+        'TA': 3,
+        'DC': 4,
+        'LC': 5,
+        'MC': 6,
+        'PC': 7
+    }
+
+    # def load_data_info(pathname):
+    #     file_list = glob.glob(pathname)
+    #     if label_type != 'caption':
+    #         label_list = [int(file_path.split('/')[-4][0]) for file_path in file_list]
+    #     else:
+    #         label_list = [mapping_dict[file_path.split('/')[-4][0]] for file_path in file_list]
+    #     return list(zip(file_list, label_list))
+    data_root_dir = '/data3/anhnguyen/breasthis/imgs'
+    # txt_file = f'/data3/anhnguyen/breasthis/dsfold{fold_idx}.txt'
+    txt_file = f'/data3/anhnguyen/breasthis/fold1_new.txt'
+    file1 = open(txt_file, 'r')
+    train_set = []
+    test_set = []
+    while True:
+        line = file1.readline()
+        if not line:
+            break
+        file_name = line.split('|')[0] # /data3/anhnguyen/breasthis/imgs/SOB_B_A-14-22549AB-40-001.png
+        # if file_name.split('-')[-2] == '40':
+        file_path = os.path.join(data_root_dir, file_name)
+        sample_type = line.split('|')[-1].replace('\n','')
+        if label_type == 'caption':
+            label = mapping_dict[file_name.split('-')[0].split('_')[-1]]
+        else:
+            label = mapping_dict_idx[file_name.split('-')[0].split('_')[-1]]
+        if sample_type == 'train':
+            train_set.append((file_path, label))
+        else:
+            test_set.append((file_path, label))
+        # train_set.append((file_path, label))
+    
+    file1.close()
+    
+
+    # adenosis = load_data_info('%s/benign/SOB/0_adenosis/*/*/*' % data_root_dir)
+    # fibroadenoma = load_data_info('%s/benign/SOB/1_fibroadenoma/*/*/*' % data_root_dir)
+    # phyllodes = load_data_info('%s/benign/SOB/2_phyllodes_tumor/*/*/*' % data_root_dir)
+    # tubular = load_data_info('%s/benign/SOB/3_tubular_adenoma/*/*/*' % data_root_dir)
+    # ductal = load_data_info('%s/malignant/SOB/4_ductal_carcinoma/*/*/*' % data_root_dir)
+    # lobular = load_data_info('%s/malignant/SOB/5_lobular_carcinoma/*/*/*' % data_root_dir)
+    # mucinous = load_data_info('%s/malignant/SOB/6_mucinous_carcinoma/*/*/*' % data_root_dir)
+    # papillary = load_data_info('%s/malignant/SOB/7_papillary_carcinoma/*/*/*' % data_root_dir)
+
+    # import random
+    # random.shuffle(train_set)
+
+    # test_set = train_set[:int(len(train_set)*0.2)]
+    # train_set = train_set[int(len(train_set)*0.2):]
+    # random.shuffle(fibroadenoma)
+    # random.shuffle(phyllodes)
+    # random.shuffle(tubular)
+    # random.shuffle(ductal)
+    # random.shuffle(lobular)
+    # random.shuffle(mucinous)
+    # random.shuffle(papillary)
+
+    # train_set = adenosis[:int((len(adenosis)+1)*.70)] + \
+    #             fibroadenoma[:int((len(fibroadenoma)+1)*.70)] + \
+    #             phyllodes[:int((len(phyllodes)+1)*.70)] + \
+    #             tubular[:int((len(tubular)+1)*.70)] + \
+    #             ductal[:int((len(ductal)+1)*.70)] + \
+    #             lobular[:int((len(lobular)+1)*.70)] + \
+    #             mucinous[:int((len(mucinous)+1)*.70)] + \
+    #             papillary[:int((len(papillary)+1)*.70)]
+                 
+    # valid_set = adenosis[int((len(adenosis)+1)*.70):int((len(adenosis)+1)*.80)] + \
+    #             fibroadenoma[int((len(fibroadenoma)+1)*.70):int((len(fibroadenoma)+1)*.80)] + \
+    #             phyllodes[int((len(phyllodes)+1)*.70):int((len(phyllodes)+1)*.80)] + \
+    #             tubular[int((len(tubular)+1)*.70):int((len(tubular)+1)*.80)] + \
+    #             ductal[int((len(ductal)+1)*.70):int((len(ductal)+1)*.80)] + \
+    #             lobular[int((len(lobular)+1)*.70):int((len(lobular)+1)*.80)] + \
+    #             mucinous[int((len(mucinous)+1)*.70):int((len(mucinous)+1)*.80)] + \
+    #             papillary[int((len(papillary)+1)*.70):int((len(papillary)+1)*.80)] 
+    
+    # test_set = adenosis[int((len(adenosis)+1)*.80):] + \
+    #             fibroadenoma[int((len(fibroadenoma)+1)*.80):] + \
+    #             phyllodes[int((len(phyllodes)+1)*.80):] + \
+    #             tubular[int((len(tubular)+1)*.80):] + \
+    #             ductal[int((len(ductal)+1)*.80):] + \
+    #             lobular[int((len(lobular)+1)*.80):] + \
+    #             mucinous[int((len(mucinous)+1)*.80):] + \
+    #             papillary[int((len(papillary)+1)*.80):]
+
+    return train_set, test_set
+
+# prepare_breakhis ()
+
+def prepare_bladder(label_type='caption'):
+    mapping_dict = {
+        '1': 'low grade cancer.',
+        '2': 'high grade cancer.',
+        '3': 'non-tumor.',
+    }
+    def load_data_info(pathname):
+        file_list = glob.glob(pathname)
+        if label_type != 'caption':
+            label_list = []
+            for file_path in file_list:
+                idx = int(file_path.split('/')[-2][-1]) - 1
+                if idx != 3:
+                    label_list.append(int(file_path.split('/')[-2][-1]) - 1)
+                else:
+                    label_list.append(0)
+        else:
+            label_list = [mapping_dict[file_path.split('/')[-2][-1]] for file_path in file_list]
+        return list(zip(file_list, label_list))
+    data_root_dir = '/data2/doanhbc/prosessed_bladder_data_1024_2'
+    train_set = load_data_info('%s/train/*/*/*' % data_root_dir)
+    valid_set = load_data_info('%s/val/*/*/*' % data_root_dir)
+    test_set = load_data_info('%s/test/*/*/*' % data_root_dir)
+
+    return train_set, valid_set, test_set
+
+def prepare_data(args):
+    if args.type != 'single_encoder':
+        dataset_type = 'caption'
     else:
-        raise ValueError(f'Not support {dataset_name}')
+        dataset_type = 'class_index'
+    if args.dataset == 'colon-1':
+        return prepare_colon(dataset_type)
+    elif args.dataset == 'colon-2':
+        return prepare_colon_test_2(dataset_type)
+    elif args.dataset == 'prostate-1':
+        return prepare_prostate_uhu_data(dataset_type)
+    elif args.dataset == 'prostate-2':
+        return prepare_prostate_ubc_data(dataset_type)
+    elif args.dataset == 'prostate-3':
+        return prepare_aggc2022_data(dataset_type)
+    elif args.dataset == 'gastric':
+        return prepare_gastric(nr_classes=4, label_type=type)
+    elif args.dataset == 'k19':
+        return prepare_k19(dataset_type)
+    elif args.dataset == 'k16':
+        return prepare_k16(dataset_type)
+    elif args.dataset == 'kidney':
+        return prepare_kidney(dataset_type)
+    elif args.dataset == 'liver':
+        return prepare_liver(dataset_type)
+    elif args.dataset == 'bladder':
+        return prepare_bladder(dataset_type)
+    elif args.dataset == 'breakhis':
+        return prepare_breakhis(dataset_type, args.breakhis_fold)
+    else:
+        raise ValueError(f'Not support {args.dataset}')
 
 # get the hint aka hard prompt text
 def get_hard_prompt(dataset_name):
-    if dataset_name in ['colon-1', 'colon-2', 'prostate-1', 'prostate-2', 'gastric']:
-        return "the cancer grading of this image is"
+    if dataset_name in ['colon-1', 'colon-2']:
+        return "the cancer grading of this colorectal patch is"
+    elif dataset_name in ['kidney']:
+        return "the cancer grading of this kidney patch is"
+    elif dataset_name in ['breakhis']:
+        return "the tumor type of this breast patch is"
+    elif dataset_name in ['liver']:
+        return "the cancer grading of this liver patch is"
+    elif dataset_name in ['bladder']:
+        return "the tumor type of this bladder patch is"
+    elif dataset_name in ['prostate-1', 'prostate-2', 'prostate-3']:
+        return "the cancer grading of this prostate patch is"
+    elif dataset_name in ['gastric']:
+        return "the cancer grading of this gastric patch is"
     elif dataset_name in ['k19','k16']:
-        return "the tissue type of this image is"
+        return "the tissue type of this colorectal patch is"
     else:
         raise ValueError(f'Not support dataset {dataset_name}')
 
 # prepend hard prompt to label
 def combine_hard_prompt_with_label(hard_prompt_text, label):
-    if label.split(' ')[-1] == 'cancer.':               # eliminate "duplicated" cancer word at the end
-        label = " ".join(label.split(' ')[:-1]) + '.'
+    try:
+        if label.split(' ')[-1] == 'cancer.':               # eliminate "duplicated" cancer word at the end
+            label = " ".join(label.split(' ')[:-1]) + '.'
+    except:
+        print(label)
     if hard_prompt_text[-1] == ' ':                     # make sure to seperate by a space
         hard_prompt_text += label
     else:
@@ -582,32 +807,85 @@ def combine_hard_prompt_with_label(hard_prompt_text, label):
     return hard_prompt_text
 
 # get caption list of dataset, with other
-def get_caption(dataset_name):
+def get_caption(dataset_name, type='caption'):
     if dataset_name in ['colon-1', 'colon-2']:
         label = ['benign.',
                  'well differentiated cancer.',
                  'moderately differentiated cancer.',
                  'poorly differentiated cancer.'
         ]
-    elif dataset_name in ['prostate-1', 'prostate-2']:
+        if type != 'caption':
+            label = [0,1,2,3]
+    elif dataset_name == 'liver':
+        label = ['normal.',
+                 'grade 1 cancer.',
+                 'grade 2 cancer.',
+                 'grade 3 cancer.'
+        ]
+        if type != 'caption':
+            label = [0,1,2,3]
+    elif dataset_name == 'kidney':
+        label = ['normal.',
+                 'grade 1 cancer.',
+                 'grade 2 cancer.',
+                 'grade 3 cancer.',
+                 'grade 4 cancer.',
+        ]
+        if type != 'caption':
+            label = [0,1,2,3,4]
+    elif dataset_name == 'bladder':
+        label = ['non-tumor.',
+                 'low grade cancer.',
+                 'high grade cancer.'
+        ]
+        if type != 'caption':
+            label = [0,1,2]
+    elif dataset_name == 'breakhis':
+        label = ['benign - adenosis.',
+                'benign - fibroadenoma.',
+                'benign - phyllodes tumor.',
+                'benign - tubular adenoma.',
+                'malignant - ductal carcinoma.',
+                'malignant - lobular carcinoma.',
+                'malignant - mucinous carcinoma.',
+                'malignant - carcinoma.'
+        ]
+        if type != 'caption':
+            label = [0,1,2,3,4,5,6,7]
+    elif dataset_name in ['prostate-1', 'prostate-2', 'prostate-3']:
         label = ['benign.',
                  'grade 3 cancer.',
                  'grade 4 cancer.',
                  'grade 5 cancer.'
         ]
+        if type != 'caption':
+            label = [0,1,2,3]
     elif dataset_name in ['gastric']:
         label = ['benign.',
                  'tubular well differentiated cancer.',
                  'tubular moderately differentiated cancer.',
                  'tubular poorly differentiated cancer.'
         ]
+        if type != 'caption':
+            label = [0,1,2,3]
     elif dataset_name in ['k19', 'k16']:
-        raise NotImplemented
+        label = [
+            'adipole.',
+            'background.',
+            'debris.',
+            'lymphocyte.',
+            'normal.',
+            'stroma.',
+            'tumor.'
+        ]
+        if type != 'caption':
+            label = [0,1,2,3,4,5,6]
     else:
         raise ValueError(f'Not support dataset {dataset_name}')
     result = []
+    if type != 'caption':
+        return label
     for l in label:
         hard_prompt = get_hard_prompt(dataset_name)
         result.append(combine_hard_prompt_with_label(hard_prompt, l))
     return result
-

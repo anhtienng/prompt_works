@@ -3,14 +3,14 @@ from argparse import Namespace
 import os 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-from datetime import datetime
 import torch
 import json
 from tqdm import tqdm
 from torch.utils.data import DataLoader
-from model.model_with_prompt import PromptModel, PromptModelWithConnection
-from datasets import ImageCaptionDataset, prepare_data
-from utils import generate, calculate_metrics, save_config_and_metric
+from model.model_with_prompt import PromptModel
+from model.single_encoder import SingleEncoder
+from datasets import ImageDataset, prepare_data
+from utils import generate, calculate_metrics, save_config_and_metric, get_num_class
 
 
 def test(args, test_dataset, model):
@@ -29,11 +29,16 @@ def test(args, test_dataset, model):
     with torch.no_grad():
         print(f">>> Testing")
         progress = tqdm(total=len(test_dataloader))
-        for idx, (img_path, img_tensor, hard_text_prompt, caption) in enumerate(test_dataloader):
+        for idx, (img_path, img_tensor, hard_text_prompt, label) in enumerate(test_dataloader):
             img_tensor = img_tensor.to(device, dtype=torch.float32)  # bs x 3 x 512 x 512               
-            gen_cap = generate(model, img_tensor, hard_text_prompt, args)
-            ground_truth_list += caption
-            prediction_list += gen_cap
+            if args.type != 'single_encoder':                    
+                gen_cap = generate(model, img_tensor, hard_text_prompt, args)
+                ground_truth_list += label
+                prediction_list += gen_cap
+            else:
+                outputs = model(img_tensor)
+                ground_truth_list += list(label)
+                prediction_list += torch.argmax(outputs, dim=1).tolist()
             progress.update()
         progress.close()
     
@@ -50,11 +55,13 @@ def main():
     parser = argparse.ArgumentParser()
 
     # Dataset
-    parser.add_argument('--dataset', choices=['colon-1','colon-2','prostate-1','prostate-2','gastric', 'k19'],
+    parser.add_argument('--dataset', choices=['colon-1','colon-2',
+                                              'prostate-1','prostate-2','prostate-3',
+                                              'gastric', 'k19', 'kidney', 'liver'],
                         default='prostate-1')
 
     # Testing configuaration
-    parser.add_argument('--bs', type=int, default=512)
+    parser.add_argument('--bs', type=int, default=256)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--generate_length', type=int, default=6)
     parser.add_argument('--model_pth', type=str, default='')
@@ -69,35 +76,35 @@ def main():
     with open(training_config_file) as file:
         args = json.load(file)
         args['model_pth'] = None
-        args['visual_feature_position'] = 'in_key_and_value'
         args = Namespace(**args)
     
     file.close()
 
     args.dataset = overwrite_args.dataset
     args.device = overwrite_args.device
+    args.bs = overwrite_args.bs
     args.generate_length = overwrite_args.generate_length
     args.model_pth = overwrite_args.model_pth
     args.out_dir = overwrite_args.out_dir
-    args.bs = overwrite_args.bs
     args.device = torch.device(f'cuda:{args.device}')
+    if 'type' not in args:
+        args.type = args.prompt_type
     
-    data = prepare_data(args.dataset)
+    data = prepare_data(args.dataset, type=args.type)
     if isinstance(data,tuple):
         test_set = data[2]
     else:
         test_set = data
     
-    if args.prompt_type == 'connection':
-        model = PromptModelWithConnection(args)
+    if args.type == 'single_encoder':
+        model = SingleEncoder(args, get_num_class(args.dataset))
     else:
         model = PromptModel(args)
-    
-    # args.model_pth = args.model_pth.replace(last, f'{i}.pt')
+        td = torch.load(args.model_pth, map_location=args.device)
+        model.load_state_dict(td['model_state_dict'], strict=True)
+
     print(args.model_pth)
-    td = torch.load(args.model_pth)
-    model.load_state_dict(td['model_state_dict'], strict=True)
-    test_dataset = ImageCaptionDataset(test_set, args, train=False)
+    test_dataset = ImageDataset(test_set, args, train=False)
     test(args, test_dataset, model)
 
 if __name__ == '__main__':
