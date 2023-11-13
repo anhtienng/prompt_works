@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import AutoProcessor, GPT2Tokenizer
-from .swin_transformer import ctranspath
+from .swin_transformer import ctranspath, swinv1
 from .clip import CLIPModel
 from .gpt2 import GPT2Model
 from .prompt import EncoderPrompt, DecoderPrompt, Lora
@@ -28,9 +28,15 @@ class PromptModel(nn.Module):
             self.encoder.head = nn.Identity()
             td = torch.load(self.args.encoder_ckpt_path)
             self.encoder.load_state_dict(td['model'], strict=True)
+        elif self.args.encoder_type == 'swin_tiny':
+            self.encoder = swinv1()
+            td = torch.load(self.args.encoder_ckpt_path)
+            self.encoder.load_state_dict(td['model'], strict=True)
+            self.encoder.head = nn.Identity()
         elif self.args.encoder_type == 'e_plip':
             self.encoder = CLIPModel.from_pretrained(self.args.decoder_ckpt_path).vision_model
             self.encoder.encoder.decoder_skip_layers_for_visual = [i for i in range(12)]
+        
         else:
             raise ValueError(f'Encoder {self.args.encoder_type} is not supported')
 
@@ -75,7 +81,7 @@ class PromptModel(nn.Module):
             self.decoder_lora_dict = self.decoder_lora.lora_combination[1]
 
             for layer_id in self.encoder_lora_dict:
-                if self.args.encoder_type == 'ctranspath':
+                if self.args.encoder_type in ['ctranspath','swin_tiny']:
                     setattr(self.encoder, f'lora_layer_{layer_id}', self.encoder_lora_dict[layer_id])
                 elif self.args.encoder_type == 'e_plip':
                     setattr(self.encoder.encoder, f'lora_layer_{layer_id}', self.encoder_lora_dict[layer_id])
@@ -105,17 +111,25 @@ class PromptModel(nn.Module):
 
     def get_query(self, img, text):
         with torch.no_grad():
-            if self.args.encoder_type == 'ctranspath':
+            if self.args.encoder_type in ['ctranspath','swin_tiny']:
                 visual_query = self.encoder(img, use_prompt=False, use_lora=False, lora_config=None)
                 token = self.tokenizer(text, return_tensors="pt", padding=True)
                 input_ids=token['input_ids'][:,:-1].to(self.args.device)
-                attention_mask=torch.where(input_ids<50257,1,0).to(self.args.device) 
-                text_query = self.decoder(input_ids=input_ids, 
+                attention_mask=torch.where(input_ids<50257,1,0).to(self.args.device)
+                if self.args.decoder_type == 'd_plip':
+                    text_query = self.decoder(input_ids=input_ids, 
                                           proj_encoder_feature=None, 
                                           attention_mask=attention_mask,
                                           use_prompt=False,
                                           use_lora=False, 
                                           lora_config=None).pooler_output
+                elif self.args.decoder_type == 'gpt2':
+                    text_query = self.decoder(input_ids=input_ids, 
+                                          proj_encoder_feature=None, 
+                                          attention_mask=attention_mask,
+                                          use_prompt=False,
+                                          use_lora=False, 
+                                          lora_config=None).last_hidden_state[:,-1,:]
                 query = torch.cat((visual_query, text_query),dim=1)
             elif self.args.encoder_type == 'e_plip':
                 for layer_id in self.encoder_prompt_dict:
@@ -129,7 +143,7 @@ class PromptModel(nn.Module):
         assert len(img.shape)==4 and img.shape[1:] == (3,224,224), \
                     f'Expect img input of shape (bs,3,224,3,224) but got {img.shape}'
         # Forward through an encoder
-        if self.args.encoder_type == 'ctranspath':
+        if self.args.encoder_type in ['ctranspath','swin_tiny']:
             img = self.encoder(img, lora_config=(self.args.lora_drop_out, self.args.lora_alpha))
         elif self.args.encoder_type == 'e_plip':
             img = self.encoder(img)[1]

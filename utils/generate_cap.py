@@ -9,7 +9,7 @@ def generate(
     model.eval()
 
     with torch.no_grad():
-        if args.encoder_type == 'ctranspath':
+        if args.encoder_type in ['ctranspath','swin_tiny']:
             img = model.encoder(img, lora_config=(0.0, args.lora_alpha))
         else:
             img = model.encoder(img)[1]
@@ -44,5 +44,9 @@ def generate(
             input_ids = torch.cat((input_ids,next_token),dim=1)
     result = model.tokenizer.batch_decode(input_ids)
     for i in range(len(result)):
+        if args.dataset == 'luad' and args.type == 'lora':
+            predict = result[i].split(' is ')[-1].split(' ')[0]
+            result[i] = f"the type of this lung patch is {predict}"
         result[i] = result[i].split('.')[0].replace('<|startoftext|>', '').replace('<|endoftext|>', '') + '.'
+        result[i] = result[i].replace(' - ', '-')
     return list(result)

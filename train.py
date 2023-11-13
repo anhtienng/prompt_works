@@ -31,6 +31,10 @@ def train(args, train_dataset, valid_dataset, model):
     elif args.scheduler_type == 'linear':
         num_steps = len(train_dataloader)*epochs
         scheduler = get_linear_schedule_with_warmup(optimizer, int(num_steps*args.warmup_ratio), num_steps)
+    elif args.scheduler_type == 'cosine_restart':
+        import torch.optim as optim
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs // 2, T_mult=1,
+                                                                   eta_min=args.lr * 0.1, last_epoch=-1)
     else:
         raise ValueError(f'Not support {args.scheduler_type}')
     writer = SummaryWriter(args.out_dir)
@@ -87,7 +91,7 @@ def train(args, train_dataset, valid_dataset, model):
             progress.update()
             if args.scheduler_type == 'linear':
                 scheduler.step()
-        if args.scheduler_type == 'cosine':
+        if args.scheduler_type in ['cosine','cosine_restart']:
             scheduler.step()
         progress.close()
 
@@ -152,22 +156,24 @@ def main():
 
     # Dataset
     parser.add_argument('--dataset', choices=['colon-1', 'prostate-1', 'gastric', 'k19',
-                                              'liver', 'kidney','breakhis','bladder'],default='colon-1')
+                                              'liver', 'kidney','breakhis','bladder','bach',
+                                              'pcam','panda', 'medfm', 'unitopath', 'luad'],default='colon-1')
     parser.add_argument('--breakhis_fold', type=int, default=1)
 
     # Training configuaration
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--bs', type=int, default=256)
-    parser.add_argument('--device', type=int, default=7)
+    parser.add_argument('--device', type=int, default=2)
     parser.add_argument('--optimizer_type', type=str, default="Adam")
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--momentum', type=float, default=0)
     parser.add_argument('--betas', type=tuple, default=(0.9, 0.999))
     parser.add_argument('--valid_every', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=10)
-    parser.add_argument('--scheduler_type', type=str, default="linear")
+    parser.add_argument('--scheduler_type', type=str, default="cosine")
     parser.add_argument('--warmup_ratio', type=float, default=0.1)
     parser.add_argument('--scheduler_k', type=int, default=50)
-    parser.add_argument('--generate_length', type=int, default=6)
+    parser.add_argument('--generate_length', type=int, default=12)
 
     # Adapt methods
     parser.add_argument('--type', type=str, choices=['basic', 'distinct',
@@ -189,20 +195,28 @@ def main():
     parser.add_argument('--decoder_skip_layers_for_visual', type=list, default=[6,7,8,9,10,11])   # skip for visual feature
 
     # Encoder
-    parser.add_argument('--encoder_type', type=str, default='ctranspath')
+    # parser.add_argument('--encoder_type', type=str, default='swin_tiny')
+    # parser.add_argument('--encoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/swin_tiny_patch4_window7_224.pth')
+
+    parser.add_argument('--encoder_type', type=str, default='resnet50')
     parser.add_argument('--encoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/ctranspath.pth')
+
     parser.add_argument('--encoder_resize', type=int, default=224)
     parser.add_argument('--encoder_mean', default=(0.485, 0.456, 0.406))
     parser.add_argument('--encoder_std', default=(0.229, 0.224, 0.225))
 
     # Projector
-    parser.add_argument('--layers_dim', type=list, default=[768, 1024, 4096, 2048, 512])
+    parser.add_argument('--layers_dim', type=list, default=[768, 1024, 4096, 2048, 768])
     parser.add_argument('--proj_activation', type=str, default='gelu')
     
     # Decoder
-    parser.add_argument('--decoder_type', type=str, default='d_plip')
-    parser.add_argument('--decoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/plip_ckpt')
-    parser.add_argument('--tokenizer_type', type=str, default="vinid/plip")
+    parser.add_argument('--decoder_type', type=str, default='gpt2')
+    parser.add_argument('--decoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/gpt2_ckpt')
+    parser.add_argument('--tokenizer_type', type=str, default="gpt2")
+
+    # parser.add_argument('--decoder_type', type=str, default='d_plip')
+    # parser.add_argument('--decoder_ckpt_path', type=str, default='/home/compu/anhnguyen/prompt_works/model/plip_ckpt')
+    # parser.add_argument('--tokenizer_type', type=str, default="vinid/plip")
 
     # Saving configuration
     parser.add_argument('--out_dir', default='/data4/anhnguyen/experiments/prompt_work/')

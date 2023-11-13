@@ -180,28 +180,38 @@ class GPT2Attention(nn.Module):
         self.num_heads = self.num_heads - len(heads)
         self.pruned_heads = self.pruned_heads.union(heads)
 
-    def _attn(self, query, key, value, 
+    def _attn(self, query, key, value,  # bs, num_head, seq_len, head_dim
               attention_mask=None, 
               head_mask=None,
               prompt_for_layer = None,
-              proj_encoder_feature = None):
-        # TODO: add prompt here for K, V
+              proj_encoder_feature = None,
+              lora_for_layer = None,
+              lora_config = None,):
+        # TODO: LORA here !!! 
         bsz = query.shape[0]
         head_dim = query.shape[-1]
+
+        # if lora_for_layer is not None:
+        #     lora_scale = lora_config[1] / lora_for_layer[0].shape[1]
+        #     lora_dropout = nn.Dropout(lora_config[0])
+        #     query = torch.add(query, torch.matmul(lora_dropout(query),torch.matmul(lora_for_layer[0],lora_for_layer[1])*lora_scale))
+        #     key = torch.add(key, torch.matmul(lora_dropout(key),torch.matmul(lora_for_layer[2],lora_for_layer[3])*lora_scale))
+        #     value = torch.add(value, torch.matmul(lora_dropout(value),torch.matmul(lora_for_layer[4],lora_for_layer[5])*lora_scale))
+
+        if proj_encoder_feature is not None:
+            proj_encoder_feature = \
+                proj_encoder_feature.reshape(bsz, -1, self.num_heads, head_dim).permute(0, 2, 1, 3)    # bs, num_heads, prompt_len, head_dim
+            key = torch.cat((proj_encoder_feature,key), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+            value = torch.cat((proj_encoder_feature,value), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+
         if prompt_for_layer is not None:
             assert len(prompt_for_layer.shape)==2, f'Check the shape of prompt for each layer in GPT2 {prompt_for_layer.shape}'
             prompt_for_layer = prompt_for_layer.expand(bsz,-1,-1)                                      # expand prompt for all data in batch
             pk, pv = (prompt_for_layer, prompt_for_layer)                                              # bs, prompt_len, dim
             pk = pk.reshape(bsz, -1, self.num_heads, head_dim).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
             pv = pv.reshape(bsz, -1, self.num_heads, head_dim).permute(0, 2, 1, 3)  # bs, num_heads, prompt_len, head_dim
-            if proj_encoder_feature is not None:
-                proj_encoder_feature = \
-                    proj_encoder_feature.reshape(bsz, -1, self.num_heads, head_dim).permute(0, 2, 1, 3)    # bs, num_heads, prompt_len, head_dim
-                key = torch.cat((pk,proj_encoder_feature,key), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-                value = torch.cat((pv,proj_encoder_feature,value), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
-            else:
-                key = torch.cat((pk,key), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
-                value = torch.cat((pv,value), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
+            key = torch.cat((pk,key), dim=2)                        # bs, num_heads, seq_len+prompt_len, head_dim 
+            value = torch.cat((pv,value), dim=2)                    # bs, num_heads, seq_len+prompt_len, head_dim
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))           
 
@@ -322,6 +332,8 @@ class GPT2Attention(nn.Module):
         output_attentions: Optional[bool] = False,
         prompt_for_layer = None,
         proj_encoder_feature = None,
+        lora_for_layer = None,
+        lora_config = None,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
@@ -335,6 +347,13 @@ class GPT2Attention(nn.Module):
             attention_mask = encoder_attention_mask
         else:
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+        
+        if lora_for_layer is not None:
+            lora_scale = lora_config[1] / lora_for_layer[0].shape[1]
+            lora_dropout = nn.Dropout(lora_config[0])
+            query = torch.add(query, torch.matmul(lora_dropout(query),torch.matmul(lora_for_layer[0],lora_for_layer[1])*lora_scale))
+            key = torch.add(key, torch.matmul(lora_dropout(key),torch.matmul(lora_for_layer[2],lora_for_layer[3])*lora_scale))
+            value = torch.add(value, torch.matmul(lora_dropout(value),torch.matmul(lora_for_layer[4],lora_for_layer[5])*lora_scale))
 
         query = self._split_heads(query, self.num_heads, self.head_dim)       # bs, num_head, seq_len, head_dim
         key = self._split_heads(key, self.num_heads, self.head_dim)           # bs, num_head, seq_len, head_dim
@@ -355,7 +374,10 @@ class GPT2Attention(nn.Module):
         else:
             attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask, 
                                                    prompt_for_layer = prompt_for_layer,
-                                                   proj_encoder_feature = proj_encoder_feature,)
+                                                   proj_encoder_feature = proj_encoder_feature,
+                                                   lora_for_layer = lora_for_layer,
+                                                   lora_config = lora_config
+                                                   )
 
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
@@ -413,6 +435,8 @@ class GPT2Block(nn.Module):
         output_attentions: Optional[bool] = False,
         proj_encoder_feature = None,
         prompt_for_layer = None,
+        lora_for_layer = None,
+        lora_config = None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -424,7 +448,9 @@ class GPT2Block(nn.Module):
             use_cache=use_cache,
             output_attentions=output_attentions,
             proj_encoder_feature=proj_encoder_feature,
-            prompt_for_layer=prompt_for_layer
+            prompt_for_layer=prompt_for_layer,
+            lora_for_layer=lora_for_layer,
+            lora_config=lora_config,
         )
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
@@ -787,6 +813,7 @@ class GPT2Model(GPT2PreTrainedModel):
     def forward(
         self,
         proj_encoder_feature,
+        lora_config,
         input_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
@@ -800,6 +827,8 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        use_lora = True,
+        use_prompt = True,
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -933,6 +962,15 @@ class GPT2Model(GPT2PreTrainedModel):
             else:
                 if i in self.decoder_skip_layers_for_visual:
                     proj_encoder_feature = None
+                if not hasattr(self, f'prompt_layer_{i}') or not use_prompt:
+                    prompt_for_layer = None
+                else:
+                    prompt_for_layer = getattr(self, f'prompt_layer_{i}')
+                if not hasattr(self, f'lora_layer_{i}') or not use_lora:
+                    lora_for_layer = None
+                else:
+                    lora_for_layer = getattr(self, f'lora_layer_{i}')
+
                 outputs = block(
                     hidden_states,
                     layer_past=layer_past,
@@ -943,7 +981,9 @@ class GPT2Model(GPT2PreTrainedModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                     proj_encoder_feature=proj_encoder_feature,
-                    prompt_for_layer=getattr(self, f'prompt_layer_{i}')
+                    prompt_for_layer=prompt_for_layer,
+                    lora_for_layer=lora_for_layer,
+                    lora_config=lora_config
                 )
 
             hidden_states = outputs[0]

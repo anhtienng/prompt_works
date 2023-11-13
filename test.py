@@ -57,14 +57,16 @@ def main():
     # Dataset
     parser.add_argument('--dataset', choices=['colon-1','colon-2',
                                               'prostate-1','prostate-2','prostate-3',
-                                              'gastric', 'k19', 'kidney', 'liver'],
+                                              'gastric', 'k19', 'kidney', 'liver', 
+                                              'bach', 'breakhis', 'pcam', 'panda',
+                                              'k16', 'unitopath', 'bladder'],
                         default='prostate-1')
 
     # Testing configuaration
     parser.add_argument('--bs', type=int, default=256)
     parser.add_argument('--device', type=int, default=0)
-    parser.add_argument('--generate_length', type=int, default=6)
-    parser.add_argument('--model_pth', type=str, default='')
+    parser.add_argument('--generate_length', type=int, default=12)
+    parser.add_argument('--model_pth', type=str, default='/data4/anhnguyen/experiments/prompt_work/single_encoder/kidney-AdamW-cosine-resnet50--474/kidney-AdamW-cosine-resnet50--474-5.pt')
     
     # Saving configuration
     parser.add_argument('--out_dir', default='/data4/anhnguyen/experiments/prompt_work/testing/')
@@ -81,7 +83,7 @@ def main():
     file.close()
 
     args.dataset = overwrite_args.dataset
-    args.device = overwrite_args.device
+    # args.device = overwrite_args.device
     args.bs = overwrite_args.bs
     args.generate_length = overwrite_args.generate_length
     args.model_pth = overwrite_args.model_pth
@@ -90,7 +92,7 @@ def main():
     if 'type' not in args:
         args.type = args.prompt_type
     
-    data = prepare_data(args.dataset, type=args.type)
+    data = prepare_data(args)
     if isinstance(data,tuple):
         test_set = data[2]
     else:
@@ -98,6 +100,8 @@ def main():
     
     if args.type == 'single_encoder':
         model = SingleEncoder(args, get_num_class(args.dataset))
+        td = torch.load(args.model_pth, map_location=args.device)
+        model.load_state_dict(td['model_state_dict'], strict=True)
     else:
         model = PromptModel(args)
         td = torch.load(args.model_pth, map_location=args.device)

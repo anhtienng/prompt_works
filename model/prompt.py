@@ -99,7 +99,7 @@ def create_prompt_combination(type='ctranspath', prompt_len=1, skip_layers=[], d
 
 def create_lora_combination(args, module):
     lora_dict = {}
-    if args.encoder_type == 'ctranspath' and module=='encoder':
+    if args.encoder_type in ['ctranspath','swin_tiny'] and module=='encoder':
         head_dim = 32
         num_blocks_in_each_stage = [2,2,6,2]
         dim_of_each_stage = [
@@ -140,10 +140,27 @@ def create_lora_combination(args, module):
                                                 lora_a_v, lora_b_v])
             else:
                 lora_dict[i] = None
+    elif args.decoder_type == 'gpt2' and module=='decoder':
+        num_layers = 12
+        model_dim = 768
+        for i in range(num_layers):
+            if i not in args.decoder_lora_skip_layers:
+                shape_a = (model_dim, args.lora_r)
+                shape_b = (args.lora_r, model_dim)
+                lora_a_q, lora_b_q = create_lora(shape_a, shape_b)
+                lora_a_k, lora_b_k = create_lora(shape_a, shape_b)
+                lora_a_v, lora_b_v = create_lora(shape_a, shape_b)
+                lora_dict[i] = nn.ParameterList([lora_a_q, lora_b_q,
+                                                lora_a_k, lora_b_k,
+                                                lora_a_v, lora_b_v])
+            else:
+                lora_dict[i] = None
     else:
         raise ValueError(f'Not support this type: {type}')
-    
-    key = create_prompt_and_key((1, 512+768))  # key is concatenated from visual_key and textual_key
+    if args.decoder_type == 'gpt2':
+        key = create_prompt_and_key((1, 768+768))
+    else:
+        key = create_prompt_and_key((1, 512+768))  # key is concatenated from visual_key and textual_key
     return key, lora_dict
 
 def create_lora(shape_a, shape_b):

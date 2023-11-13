@@ -33,9 +33,6 @@ def loss_caption(args, model, hard_text_prompt, output_logits, token_ids):
 
     return loss
 
-def loss_class_idx():
-    pass
-
 def save_info(args, log_info, writer, epoch):
     writer.add_scalar('Train/Loss', log_info['train_loss'], epoch)
     writer.add_scalar('Train/lr', log_info['lr'], epoch)
@@ -81,9 +78,10 @@ def save_config_and_metric(args, best_metrics, best_epoch, run_type='valid'):
     args_str = ",".join(args_str) + ','
 
     metrics_str = []
-    if args.dataset in ['colon-1', 'colon-2', 'prostate-1', 'prostate-2', 'prostate-3', 'gastric','liver','kidney']:
+    if args.dataset in ['colon-1', 'colon-2', 'prostate-1', 'prostate-2', 'prostate-3', 
+                        'gastric','liver','kidney','bach','panda', 'bladder']:
         metrics =  ['valid_acc','valid_cancer_acc','valid_f1','valid_kappa']
-    elif args.dataset in ['k19', 'k16', 'breakhis']:
+    elif args.dataset in ['k19', 'k16', 'breakhis','pcam','medfm','unitopath', 'luad']:
         metrics =  ['valid_acc','valid_f1','valid_pre','valid_rec']
     for metric in metrics:
         metrics_str.append(f'"{best_metrics[metric]}"')
@@ -104,6 +102,8 @@ def get_optimizer(args, model):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=args.betas)
     elif args.optimizer_type == 'AdamW':
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=args.betas)
+    elif args.optimizer_type == 'SGD':
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     else:
         raise NotImplementedError
     
@@ -125,7 +125,7 @@ def process_args(args):
     args.scheduler_k = args.epochs
 
     now = datetime.now()
-    if args.type != 'lora':
+    if args.type != 'lora' and args.type != 'single_encoder':
         args.prefix_outdir = '-'.join((args.dataset,
                                     args.optimizer_type,
                                     args.scheduler_type,
@@ -136,6 +136,14 @@ def process_args(args):
                                     str(args.decoder_prompt_len),
                                     log_skip_layers_decoder,
                                     log_skip_layers_decoder_visual,
+                                    args.prefix_outdir,
+                                    str(now)[-3:]
+                                    ))
+    elif args.type == 'single_encoder':
+        args.prefix_outdir = '-'.join((args.dataset,
+                                    args.optimizer_type,
+                                    args.scheduler_type,
+                                    args.encoder_type,
                                     args.prefix_outdir,
                                     str(now)[-3:]
                                     ))
@@ -165,11 +173,17 @@ def process_args(args):
 def get_num_class(dataset):
     if dataset != 'k19':
         num_classes = 4
-    elif dataset == 'kidney':
+    if dataset == 'kidney':
         num_classes = 5
-    elif dataset == 'breakhis':
+    if dataset == 'breakhis':
         num_classes = 8
-    elif dataset in ['k19','k16']:
+    if dataset in ['k19']:
         num_classes = 7
+    if dataset in ['k16']:
+        num_classes = 7
+    if dataset in ['pcam', 'medfm']:
+        num_classes = 2
+    if dataset in ['unitopath']:
+        num_classes = 6
 
     return num_classes
